@@ -33,11 +33,15 @@ from typing import Any
 
 import torch
 
-from comfy_kitchen.backends._activations import apply_input_act
+from comfy_kitchen.backends import _activations
 from comfy_kitchen.backends.eager.quantization import quantize_int8_rowwise
 from comfy_kitchen.constraints import FunctionConstraints, ParamConstraint
 from comfy_kitchen.registry import registry
 from comfy_kitchen.tensor.int8_utils import _build_hadamard, _rotate_activation
+
+
+apply_input_act = _activations.apply_input_act
+apply_residual = getattr(_activations, "apply_residual", None)
 
 
 LOGGER = logging.getLogger("ComfyUI-MPS-INT8")
@@ -324,8 +328,16 @@ def int8_linear(
     convrot: bool = False,
     convrot_groupsize: int = 256,
     input_act: str | None = None,
+    input_act_weight: torch.Tensor | None = None,
+    input_act_eps: float = 0.0,
+    residual: torch.Tensor | None = None,
+    residual_scale: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Execute a comfy-kitchen INT8 linear call with the native MPS kernel."""
+
+    if apply_residual is not None and input_act == "rms_norm":
+        x = apply_input_act(x, input_act, input_act_weight, input_act_eps)
+        input_act = None
 
     result = _int8_linear_impl(
         x=x,
@@ -338,6 +350,8 @@ def int8_linear(
         input_act=input_act,
         activation_mode=ACTIVATION_MODE,
     )
+    if apply_residual is not None:
+        result = apply_residual(result, residual, residual_scale)
 
     with _STATE_LOCK:
         _STATE.calls += 1
